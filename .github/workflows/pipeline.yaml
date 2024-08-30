@@ -1,0 +1,61 @@
+name: Auto Merge Specific PR to Main
+
+on:
+  pull_request:
+    types:
+      - labeled
+
+jobs:
+  merge-pr-to-main:
+    if: github.event.label.name == 'merge-to-main' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Fetch all branches and history
+        run: git fetch --all
+
+      - name: Install GitHub CLI
+        run: |
+          sudo apt-get install gh
+
+      - name: Install jq
+        run: |
+          sudo apt-get install -y jq
+
+      - name: Set PR variables
+        run: |
+          echo "PR_SHA=${{ github.event.pull_request.merge_commit_sha }}" >> $GITHUB_ENV
+          echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+
+      - name: Create a new branch from the specific PR commit
+        run: |
+          echo "Creating branch pr-to-main-${PR_NUMBER} from commit ${PR_SHA}"
+          git checkout -b pr-to-main-${PR_NUMBER} $PR_SHA
+
+      - name: Push branch to remote
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          git remote set-url origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git
+          git push origin pr-to-main-${PR_NUMBER}
+
+      - name: Create Pull Request from the PR commit to main
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          gh auth login --with-token <<<"${{ secrets.PAT_TOKEN }}"
+          gh pr create --base main --head pr-to-main-${PR_NUMBER} --title "Auto Merge: PR #${PR_NUMBER} to Main" --body "Automated PR to merge changes from PR #${PR_NUMBER} to main after passing QA."
+
+      - name: Comment on original PR
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: ${{ github.event.pull_request.number }},
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: "A new pull request has been automatically created to merge this PR into main. The following commits are included in this PR:\n$(git log main..pr-to-main-${PR_NUMBER} --oneline)\n\nAnd the diff is:\n$(git diff main..pr-to-main-${PR_NUMBER})"
+            })
